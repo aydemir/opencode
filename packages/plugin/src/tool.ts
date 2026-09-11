@@ -17,6 +17,12 @@ export type ToolContext = {
   abort: AbortSignal
   metadata(input: { title?: string; metadata?: { [key: string]: any } }): void
   ask(input: AskInput): Promise<void>
+  /**
+   * Push a live event to GlobalBus (SSE + TUI + agent stream).
+   * Currently supports `build.settled`; unknown types resolve without
+   * publishing so older hosts stay compatible.
+   */
+  emit(input: { type: string; properties: Record<string, unknown> }): Promise<void>
 }
 
 type AskInput = {

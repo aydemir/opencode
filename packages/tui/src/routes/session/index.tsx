@@ -374,6 +374,19 @@ export function Session() {
     })
   })
 
+  event.subscribe((raw) => {
+    const payload = raw as unknown as { type: string; properties: { name?: unknown; status?: unknown } }
+    if (payload.type !== "build.settled") return
+    const p = payload.properties ?? {}
+    const name = typeof p.name === "string" ? p.name : "unknown"
+    const status = typeof p.status === "string" ? p.status : "settled"
+    toast.show({
+      message: `Build ${status}: ${name}`,
+      variant: status === "PASSED" ? "success" : "warning",
+      duration: 5000,
+    })
+  })
+
   // Helper: Find next visible message boundary in direction
   const findNextVisibleMessage = (direction: "next" | "prev"): string | null => {
     const children = scroll.getChildren()

@@ -1,6 +1,7 @@
 export * as EventManifest from "./event-manifest"
 
 import { Catalog } from "./catalog"
+import { BuildEvent } from "./build-event"
 import { Durable } from "./durable-event-manifest"
 import { Event } from "./event"
 import { FileSystem } from "./filesystem"
@@ -73,6 +74,7 @@ export const Definitions = Event.inventory(
   ...LegacyEvent.Definitions,
   ...Project.Event.Definitions,
   ...SessionStatusEvent.Definitions,
+  ...BuildEvent.Definitions,
   ...QuestionV1.Event.Definitions,
   ...SessionCompactionEvent.Definitions,
   ...VcsEvent.Definitions,

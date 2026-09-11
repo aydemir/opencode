@@ -38,6 +38,7 @@ import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Format } from "../format"
 import { InstanceState } from "@/effect/instance-state"
 import { EffectBridge } from "@/effect/bridge"
+import { GlobalBus } from "@/bus/global"
 import { Question } from "../question"
 import { Todo } from "../session/todo"
 import { LSP } from "@/lsp/lsp"
@@ -150,6 +151,15 @@ const layer = Layer.effect(
                   ask: (req) => bridge.promise(toolCtx.ask(req)),
                   directory: ctx.directory,
                   worktree: ctx.worktree,
+                  emit: async (input) => {
+                    // Known live types publish to GlobalBus (upgrade.ts pattern);
+                    // unknown types no-op for older-host compatibility.
+                    if (input.type !== "build.settled") return
+                    GlobalBus.emit("event", {
+                      directory: ctx.directory,
+                      payload: { type: input.type, properties: input.properties },
+                    })
+                  },
                 }
                 const result = yield* Effect.promise(() => def.execute(args as any, pluginCtx))
                 const output = typeof result === "string" ? result : result.output
