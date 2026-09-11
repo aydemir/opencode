@@ -1807,12 +1807,18 @@ function GenericTool(props: ToolProps) {
     if (expanded() || !collapsed().overflow) return output()
     return collapsed().output
   })
+  // Native set dışına düşen MCP/custom tool'lar renksiz ⚙ kalmasın diye aile rozeti.
+  const badge = (() => {
+    if (/(^|_)hbmon_/.test(props.tool)) return { icon: "◉", iconColor: theme.info }
+    if (/(^|_)(bm|build)[_-]/.test(props.tool)) return { icon: "■", iconColor: theme.success }
+    return { icon: "⚙", iconColor: theme.accent }
+  })()
 
   return (
     <Show
       when={props.output && ctx.showGenericToolOutput()}
       fallback={
-        <InlineTool icon="⚙" pending="Writing command…" complete={true} part={props.part}>
+        <InlineTool icon={badge.icon} iconColor={badge.iconColor} pending="Writing command…" complete={true} part={props.part}>
           {props.tool} {input(props.input)}
         </InlineTool>
       }
@@ -2641,7 +2647,12 @@ const toolDisplays = new Set([
 ])
 
 export function toolDisplay(tool: string) {
-  return toolDisplays.has(tool) ? tool : "generic"
+  if (toolDisplays.has(tool)) return tool
+  // MCP/custom bash passthrough'lar (bash_safe / bash_raw + "<server>_bash_safe/raw")
+  // native Shell renderer'ını kullansın: panelli `$ command` + output.
+  if (tool === "bash_safe" || tool === "bash_raw" || tool.endsWith("_bash_safe") || tool.endsWith("_bash_raw"))
+    return "bash"
+  return "generic"
 }
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {

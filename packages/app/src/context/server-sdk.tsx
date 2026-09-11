@@ -159,8 +159,10 @@ function currentDeltaFragment(event: CurrentDelta) {
   return event.type === "session.compaction.delta" ? event.data.text : event.data.delta
 }
 
-export function resumeStreamAfterPageShow(event: PageTransitionEvent, start: () => unknown) {
-  if (!event.persisted) return
+export function resumeStreamAfterPageShow(_event: PageTransitionEvent, start: () => unknown) {
+  // Açık fetch() event stream bfcache'i engeller → pageshow'da persisted
+  // çoğunlukla false gelir, gate'li start hiç çalışmazdı (#47258).
+  // Gate kaldırıldı: start() idempotent (started ise mevcut run'ı döner).
   start()
 }
 

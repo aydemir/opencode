@@ -1,0 +1,13 @@
+diff --git a/packages/opencode/src/cli/cmd/run/runtime.lifecycle.ts b/packages/opencode/src/cli/cmd/run/runtime.lifecycle.ts
+index 4644d3d..93d57e2 100644
+--- a/packages/opencode/src/cli/cmd/run/runtime.lifecycle.ts
++++ b/packages/opencode/src/cli/cmd/run/runtime.lifecycle.ts
+@@ -97,7 +97,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
+   }
+ 
+   if (renderer.screenMode === "split-footer") {
+-    renderer.screenMode = "main-screen"
++    renderer.screenMode = "alternate-screen"
+   }
+ 
+   if (!renderer.isDestroyed) {

@@ -98,7 +98,7 @@ function shutdown(renderer: CliRenderer): void {
   }
 
   if (renderer.screenMode === "split-footer") {
-    renderer.screenMode = "main-screen"
+    renderer.screenMode = "alternate-screen"
   }
 
   if (!renderer.isDestroyed) {
