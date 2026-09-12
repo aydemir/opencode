@@ -44,7 +44,7 @@ describe("createStreamStallGuard", () => {
     const guard = createStreamStallGuard({ onStall: () => aborts++ })
 
     guard.markChunk(0)
-    // 6dk arka plan: heartbeat (10sn) çoktan kesilmiş
+    // 6min in background: heartbeat (10s) long gone
     expect(guard.onVisible("visible", 360_000)).toBe(true)
     expect(aborts).toBe(1)
   })
@@ -84,7 +84,7 @@ describe("createStreamStallGuard onOnline", () => {
     const guard = createStreamStallGuard({ onStall: () => aborts++ })
 
     guard.markChunk(0)
-    // 6dk sessizlik: online sahte değil, gerçekten ölü stream
+    // 6min of silence: online isn't spurious, the stream is truly dead
     expect(guard.onOnline(360_000)).toBe(true)
     expect(aborts).toBe(1)
   })

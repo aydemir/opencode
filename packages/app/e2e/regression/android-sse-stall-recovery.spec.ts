@@ -4,10 +4,10 @@ import { mockOpenCodeServer } from "../utils/mock-server"
 import { installSseTransport } from "../utils/sse-transport"
 import { expectSessionTitle } from "../utils/waits"
 
-// Mobil emülasyon: Android Chrome fetch yığını + dokunmatik viewport.
-// Arka plan lifecycle event'leri (visibilitychange/pageshow/online)
-// BİLEREK hiç ateşlenmiyor — in-stream watchdog'un bunlara bağımlı
-// olmadan ölü (half-open) stream'i toparladığı kanıtlanıyor.
+// Mobile emulation: Android Chrome fetch stack + touch viewport.
+// Background lifecycle events (visibilitychange/pageshow/online)
+// DELIBERATELY never fire — proving the in-stream watchdog recovers the
+// dead (half-open) stream without depending on them.
 test.use({ ...devices["Pixel 7"] })
 
 const directory = "C:/OpenCode/AndroidStall"
@@ -27,18 +27,18 @@ test("recovers a silently dead (half-open) event stream without lifecycle events
   const first = await transport.waitForConnection()
   await expectSessionTitle(page, title)
 
-  // Son görülen chunk: bundan sonra sunucu tek bayt bile göndermiyor
-  // (half-open soket). Lifecycle event'i yok — watchdog tek başına
-  // ~30sn sonra abort edip 250ms içinde reconnect etmeli.
+  // Last seen chunk: after this the server sends not a single byte
+  // (half-open socket). No lifecycle events — the watchdog alone must
+  // abort after ~30s and reconnect within 250ms.
   await transport.heartbeat()
   const second = await transport.waitForConnection({ after: first.id, timeout: 90_000 })
   expect(second.id).toBeGreaterThan(first.id)
 
-  // Ölü deneme watchdog tarafından abort edildi (hata/kapanma değil).
+  // The dead attempt was aborted by the watchdog (not an error/close).
   const connections = await transport.connections()
   expect(connections.find((connection) => connection.id === first.id)?.endedBy).toBe("abort")
 
-  // Yeni stream canlı: gönderilen olay UI'ya düşüyor.
+  // The new stream is live: the sent event reaches the UI.
   await transport.send({
     directory,
     payload: {
