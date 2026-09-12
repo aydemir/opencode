@@ -159,9 +159,56 @@ function currentDeltaFragment(event: CurrentDelta) {
   return event.type === "session.compaction.delta" ? event.data.text : event.data.delta
 }
 
-export function resumeStreamAfterPageShow(event: PageTransitionEvent, start: () => unknown) {
-  if (!event.persisted) return
+export function resumeStreamAfterPageShow(_event: PageTransitionEvent, start: () => unknown) {
+  // Açık fetch() event stream bfcache'i engeller → pageshow'da persisted
+  // çoğunlukla false gelir, gate'li start hiç çalışmazdı (#47258).
+  // Gate kaldırıldı: start() idempotent (started ise mevcut run'ı döner).
   start()
+}
+
+// Server her 10sn'de `server.heartbeat` gönderir (global.ts/event.ts) —
+// sağlıklı stream'de chunk aralığı ~10-15sn'yi geçmez. Arka planda ölen
+// (half-open) stream ne hata verir ne veri üretir; `start()` idempotent
+// guard'a takılıp no-op döndüğü için reconnect de tetiklenmez (#47258'in
+// devamı: Android'de pageshow çoğu zaman hiç ateşlenmez).
+export const STREAM_STALL_MS = 30_000
+
+export function shouldForceReconnect(opts: {
+  lastChunkAt: number | undefined
+  now?: number
+  visible?: boolean
+}): boolean {
+  if (opts.visible === false) return false
+  const now = opts.now ?? Date.now()
+  // Hiç chunk gelmediyse (bağlantı kurulurken background'a düşüldü vb.)
+  // görünür sekmeye dönüşte zorla — abort zararsız, loop 250ms sonra dener.
+  if (opts.lastChunkAt === undefined) return true
+  return now - opts.lastChunkAt > STREAM_STALL_MS
+}
+
+// Stall bekçisi: proot'ta (Android lifecycle olmadan) test edilebilen
+// ince katman. Gerçek DOM wiring'i (visibilitychange → onVisible,
+// online → onOnline) altta.
+export function createStreamStallGuard(opts: { onStall: () => void }) {
+  let lastChunkAt: number | undefined
+  return {
+    markChunk(at: number = Date.now()) {
+      lastChunkAt = at
+    },
+    onVisible(state: string, now: number = Date.now()): boolean {
+      if (state !== "visible") return false
+      if (!shouldForceReconnect({ lastChunkAt, now })) return false
+      opts.onStall()
+      return true
+    },
+    // Ağ geri geldiğinde: görünürlükten bağımsız stall kontrolü.
+    // `online` sahte de gelebilir — sağlıklı stream'e dokunulmaz.
+    onOnline(now: number = Date.now()): boolean {
+      if (!shouldForceReconnect({ lastChunkAt, now, visible: true })) return false
+      opts.onStall()
+      return true
+    },
+  }
 }
 
 type ServerEventEmitter = ReturnType<typeof createGlobalEmitter<{ [key: string]: ServerEvent }>>
@@ -251,11 +298,32 @@ function createServerSdkContextBase(server: ServerConnection.Any, scope: ServerS
   }
 
   let streamErrorLogged = false
+  const stallGuard = createStreamStallGuard({ onStall: () => attempt?.abort() })
+  // In-stream watchdog (openchamber event-pipeline parity): hiçbir lifecycle
+  // event'i (visibility/pageshow/online) ateşlenmese bile half-open stream
+  // STREAM_STALL_MS'tan fazla yaşayamaz. Her chunk'ta resetlenir, süre
+  // dolunca mevcut denemeyi abortlar — loop 250ms sonra reconnect dener.
+  let stallTimer: ReturnType<typeof setTimeout> | undefined
+  const clearStallTimer = () => {
+    if (stallTimer === undefined) return
+    clearTimeout(stallTimer)
+    stallTimer = undefined
+  }
+  const armStallTimer = () => {
+    clearStallTimer()
+    stallTimer = setTimeout(() => {
+      stallTimer = undefined
+      attempt?.abort()
+    }, STREAM_STALL_MS)
+  }
   const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
   let attempt: AbortController | undefined
   let run: Promise<void> | undefined
   let started = false
   let generation = 0
+  // offline'ta stop() edildiyse online'da start() ile devam et; pagehide
+  // ile duran stream'i online diriltmesin diye ayrı bayrak tutulur.
+  let offlineStopped = false
 
   const start = () => {
     if (started) return run
@@ -267,6 +335,9 @@ function createServerSdkContextBase(server: ServerConnection.Any, scope: ServerS
       // oxlint-disable-next-line no-unmodified-loop-condition -- `started` is set to false by stop() which also aborts; both flags are checked to allow graceful exit
       while (!abort.signal.aborted && started && generation === active) {
         attempt = new AbortController()
+        // Bağlantı kurulurken takılmaya karşı da kurulu başla (ilk chunk
+        // gelmeden asılı kalan subscribe 30sn'de abort olur, loop dener).
+        armStallTimer()
         const onAbort = () => {
           attempt?.abort()
         }
@@ -279,6 +350,8 @@ function createServerSdkContextBase(server: ServerConnection.Any, scope: ServerS
               : eventApi.event.subscribe({ signal: attempt.signal })
           let yielded = Date.now()
           for await (const event of events) {
+            stallGuard.markChunk()
+            armStallTimer()
             streamErrorLogged = false
             const legacy = "payload" in event
             if (legacy && event.payload.type === "sync") continue
@@ -301,6 +374,7 @@ function createServerSdkContextBase(server: ServerConnection.Any, scope: ServerS
           }
         } finally {
           abort.signal.removeEventListener("abort", onAbort)
+          clearStallTimer()
           attempt = undefined
         }
 
@@ -319,12 +393,38 @@ function createServerSdkContextBase(server: ServerConnection.Any, scope: ServerS
   const stop = () => {
     started = false
     generation++
+    clearStallTimer()
     attempt?.abort()
   }
 
   onMount(() => {
     makeEventListener(window, "pagehide", stop)
     makeEventListener(window, "pageshow", (event) => resumeStreamAfterPageShow(event, start))
+    // Android'de arka plan → ön plan dönüşünde pageshow çoğunlukla
+    // ateşlenmez; ölü (half-open) stream `started` guard'a takılıp
+    // sessizce asılı kalır. Görünürlüğe dönüşte stall varsa mevcut
+    // denemeyi abortla — loop'un doğal 250ms reconnect yoluna girer.
+    makeEventListener(document, "visibilitychange", () => {
+      if (!started) return
+      stallGuard.onVisible(document.visibilityState)
+    })
+    // Ağ kesilince 250ms retry spin'ine girme — loop'u durdur, timer'ı
+    // temizle. Ağ dönünce: offline'ta durduysa `start()` ile devam et
+    // (idempotent), çalışıyorsa sadece stall varsa abortla.
+    makeEventListener(window, "offline", () => {
+      if (!started) return
+      offlineStopped = true
+      stop()
+    })
+    makeEventListener(window, "online", () => {
+      if (!offlineStopped) {
+        if (!started) return
+        stallGuard.onOnline()
+        return
+      }
+      offlineStopped = false
+      start()
+    })
   })
 
   onCleanup(() => {

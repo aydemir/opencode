@@ -1,17 +1,109 @@
 import { describe, expect, test } from "bun:test"
-import { adaptServerEvent, coalesceServerEvents, enqueueServerEvent, resumeStreamAfterPageShow } from "./server-sdk"
+import { adaptServerEvent, coalesceServerEvents, createStreamStallGuard, enqueueServerEvent, resumeStreamAfterPageShow, shouldForceReconnect, STREAM_STALL_MS } from "./server-sdk"
 import type { OpenCodeEvent } from "@opencode-ai/client/promise"
 import type { Event } from "@opencode-ai/sdk/v2/client"
 
 describe("resumeStreamAfterPageShow", () => {
-  test("restarts a stream only after a back-forward cache restore", () => {
+  test("restarts the stream on pageshow regardless of bfcache persisted flag", () => {
     let starts = 0
     const start = () => starts++
 
     resumeStreamAfterPageShow({ persisted: false } as PageTransitionEvent, start)
     resumeStreamAfterPageShow({ persisted: true } as PageTransitionEvent, start)
 
-    expect(starts).toBe(1)
+    expect(starts).toBe(2)
+  })
+})
+
+describe("shouldForceReconnect", () => {
+  test("forces when visible and stream stalled beyond threshold", () => {
+    expect(shouldForceReconnect({ lastChunkAt: 0, now: STREAM_STALL_MS + 1, visible: true })).toBe(true)
+  })
+
+  test("does not force for a healthy stream (server heartbeat every 10s)", () => {
+    expect(shouldForceReconnect({ lastChunkAt: 0, now: 10_000, visible: true })).toBe(false)
+  })
+
+  test("does not force at the exact threshold boundary", () => {
+    expect(shouldForceReconnect({ lastChunkAt: 0, now: STREAM_STALL_MS, visible: true })).toBe(false)
+  })
+
+  test("never forces while hidden", () => {
+    expect(shouldForceReconnect({ lastChunkAt: 0, now: STREAM_STALL_MS + 60_000, visible: false })).toBe(false)
+    expect(shouldForceReconnect({ lastChunkAt: undefined, now: 0, visible: false })).toBe(false)
+  })
+
+  test("forces when visible but no chunk ever arrived", () => {
+    expect(shouldForceReconnect({ lastChunkAt: undefined, now: 0, visible: true })).toBe(true)
+  })
+})
+
+describe("createStreamStallGuard", () => {
+  test("aborts the dead attempt when returning visible after a stall (Android background case)", () => {
+    let aborts = 0
+    const guard = createStreamStallGuard({ onStall: () => aborts++ })
+
+    guard.markChunk(0)
+    // 6dk arka plan: heartbeat (10sn) çoktan kesilmiş
+    expect(guard.onVisible("visible", 360_000)).toBe(true)
+    expect(aborts).toBe(1)
+  })
+
+  test("leaves a healthy stream alone", () => {
+    let aborts = 0
+    const guard = createStreamStallGuard({ onStall: () => aborts++ })
+
+    guard.markChunk(20_000)
+    expect(guard.onVisible("visible", 30_000)).toBe(false)
+    expect(aborts).toBe(0)
+  })
+
+  test("ignores hidden state", () => {
+    let aborts = 0
+    const guard = createStreamStallGuard({ onStall: () => aborts++ })
+
+    guard.markChunk(0)
+    expect(guard.onVisible("hidden", 360_000)).toBe(false)
+    expect(aborts).toBe(0)
+  })
+
+  test("latest chunk wins (recovered stream is not punished)", () => {
+    let aborts = 0
+    const guard = createStreamStallGuard({ onStall: () => aborts++ })
+
+    guard.markChunk(0)
+    guard.markChunk(350_000)
+    expect(guard.onVisible("visible", 360_000)).toBe(false)
+    expect(aborts).toBe(0)
+  })
+})
+
+describe("createStreamStallGuard onOnline", () => {
+  test("aborts a stalled stream without a visibility gate (network-back case)", () => {
+    let aborts = 0
+    const guard = createStreamStallGuard({ onStall: () => aborts++ })
+
+    guard.markChunk(0)
+    // 6dk sessizlik: online sahte değil, gerçekten ölü stream
+    expect(guard.onOnline(360_000)).toBe(true)
+    expect(aborts).toBe(1)
+  })
+
+  test("leaves a healthy stream alone on spurious online", () => {
+    let aborts = 0
+    const guard = createStreamStallGuard({ onStall: () => aborts++ })
+
+    guard.markChunk(20_000)
+    expect(guard.onOnline(30_000)).toBe(false)
+    expect(aborts).toBe(0)
+  })
+
+  test("forces when no chunk ever arrived", () => {
+    let aborts = 0
+    const guard = createStreamStallGuard({ onStall: () => aborts++ })
+
+    expect(guard.onOnline(0)).toBe(true)
+    expect(aborts).toBe(1)
   })
 })
 
