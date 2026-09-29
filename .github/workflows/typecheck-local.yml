@@ -1,0 +1,31 @@
+# Fork-local typecheck. Upstream `typecheck.yml` ile ayni isi yapar, ama
+# `blacksmith-4vcpu-ubuntu-2404` yerine GitHub'in kendi `ubuntu-latest`
+# runner'ini kullanir — Blacksmith app'i fork'a kurulu degilse upstream
+# isleri kuyrukta bekler ve hic baslamaz.
+#
+# Bilesenler upstream ile ayni: ayni checkout SHA'si, ayni setup-bun action'i.
+name: typecheck-local
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Run typecheck
+        run: bun typecheck
+
+      - name: Run lint
+        run: bun lint
